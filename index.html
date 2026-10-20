@@ -173,7 +173,7 @@ const $ = s => document.querySelector(s);
 const app = $("#app");
 const W = ["일","월","화","수","목","금","토"];
 let DEPTS = {};             // 서버에서 불러온 부서 목록 {부서ID: 부서명}
-const st = { dept:null, date:null, current:0, value:DEFAULT_COUNT, busy:false, token:0, armed:false, mine:{}, pw:null };
+const st = { dept:null, date:null, current:0, value:DEFAULT_COUNT, busy:false, token:0, armed:false, mine:{}, pw:null, days:null };
 
 /* ---- 저장소(브라우저 저장이 막힌 환경 대비) ---- */
 const mem = {};
@@ -240,11 +240,13 @@ async function api(params, body){
     return { ok:false, error:"연결에 실패했습니다. 잠시 후 다시 시도해 주세요." };
   }
 }
-async function loadDepts(){
-  const r = await api({ action:"depts" });
-  if(r.ok) DEPTS = Object.fromEntries(r.depts.map(x => [x.id, x.name]));
+// 부서 목록 + 집계를 한 번의 호출로 불러와 보관 (서버 호출 횟수 줄이기)
+async function loadInit(){
+  const r = await api({ action:"init" });
+  if(r.ok){ setDepts(r.depts); st.days = r.days; }
   return r;
 }
+function applyResult(r){ if(r.depts) setDepts(r.depts); if(r.days) st.days = r.days; }
 function setDepts(list){ DEPTS = Object.fromEntries(list.map(x => [x.id, x.name])); }
 
 /* ---- 미리보기 모드(서버 없이 화면 확인용) ---- */
@@ -300,25 +302,26 @@ async function mockApi(p, b){
     db[b.date] = db[b.date] || {};
     if(b.count === 0) delete db[b.date][b.d]; else db[b.date][b.d] = b.count;
     store.set("mockdb3", JSON.stringify(db));
-    return { ok:true, count:b.count };
+    return { ok:true, count:b.count, depts, days:mockDays(db, depts, names) };
   }
+  if(p.action === "init") return { ok:true, depts, days:mockDays(db, depts, names) };
   if(p.action === "depts") return { ok:true, depts };
   if(p.action === "get") return { ok:true, count:(db[p.date] || {})[p.d] || 0 };
-  if(p.action === "summary"){
-    const today = kst().date, order = depts.map(x => x.id);
-    const days = Object.keys(db).filter(d => d >= today).sort().map(date => {
-      const ids = Object.keys(db[date]).filter(id => db[date][id])
-        .sort((a,b) => (order.indexOf(a) < 0 ? 999 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 999 : order.indexOf(b)));
-      const items = ids.map(id => ({ dept:id, name:names[id] || "삭제된 부서", count:db[date][id] }));
-      return { date, total:items.reduce((a,x) => a + x.count, 0), items };
-    }).filter(x => x.items.length);
-    return { ok:true, days };
-  }
+  if(p.action === "summary") return { ok:true, days:mockDays(db, depts, names) };
   return { ok:false, error:"잘못된 요청입니다." };
+}
+function mockDays(db, depts, names){
+  const today = kst().date, order = depts.map(x => x.id);
+  return Object.keys(db).filter(d => d >= today).sort().map(date => {
+    const ids = Object.keys(db[date]).filter(id => db[date][id])
+      .sort((a,b) => (order.indexOf(a) < 0 ? 999 : order.indexOf(a)) - (order.indexOf(b) < 0 ? 999 : order.indexOf(b)));
+    const items = ids.map(id => ({ dept:id, name:names[id] || "삭제된 부서", count:db[date][id] }));
+    return { date, total:items.reduce((a,x) => a + x.count, 0), items };
+  }).filter(x => x.items.length);
 }
 
 /* ---- 화면 1: 메인 (오늘 집계 + 부서 선택 + 식수인원 현황) ---- */
-async function viewHome(flash){
+async function viewHome(flash, ready){   // ready=true: 방금 받은 최신 데이터로 바로 그림(추가 호출 없음)
   st.dept = null; st.armed = false;
   if(location.search) history.replaceState(null, "", location.pathname);
   const t = kst();
@@ -342,7 +345,8 @@ async function viewHome(flash){
   $("#rf").onclick = () => viewHome();
   if(flash) setTimeout(() => { const f = $("#flash"); if(f) f.hidden = true; }, 4000);
 
-  const [dr, r] = await Promise.all([loadDepts(), api({ action:"summary" })]);
+  const r = ready ? { ok:true, days:st.days } : await loadInit();
+  const dr = r;
   const all = Object.keys(DEPTS).length;
 
   $("#depts").innerHTML = dr.ok
@@ -432,17 +436,15 @@ function viewForm(){
     if(!st.armed){ st.armed = true; updateUI(); return; }
     st.armed = false; doSave(0);
   };
-  loadMine();
-  loadCurrent();
+  if(st.days){ fillMine(); loadCurrent(); refreshQuiet(); }   // 보관된 데이터로 즉시 표시 + 뒤에서 최신화
+  else { refreshQuiet(true); }
 }
 
-// 이 부서의 등록 내역을 불러와 날짜 칩에 인원 표시
-async function loadMine(){
+// 보관된 집계(st.days)에서 이 부서의 등록 내역을 날짜 칩에 표시
+function fillMine(){
   const dept = st.dept;
-  const r = await api({ action:"summary" });
-  if(!r.ok || dept !== st.dept) return;
   st.mine = {};
-  r.days.forEach(day => day.items.forEach(i => { if(i.dept === dept) st.mine[day.date] = i.count; }));
+  (st.days || []).forEach(day => day.items.forEach(i => { if(i.dept === dept) st.mine[day.date] = i.count; }));
   app.querySelectorAll(".chip").forEach(b => {
     const c = st.mine[b.dataset.d];
     b.classList.toggle("has", !!c);
@@ -450,18 +452,24 @@ async function loadMine(){
   });
 }
 
-async function loadCurrent(){
-  const my = ++st.token;
-  st.busy = true; st.current = 0;
-  $("#status").textContent = "불러오는 중…";
-  updateUI(true);
-  const r = await api({ action:"get", d:st.dept, date:st.date });
-  if(my !== st.token) return;            // 날짜를 빠르게 바꾼 경우 이전 응답 무시
-  st.busy = false;
-  if(!r.ok){ $("#status").textContent = ""; showMsg(r.error, "err"); updateUI(); return; }
-  st.current = r.count || 0;
+// 선택한 날짜의 현재 등록 인원 (서버 호출 없이 보관 데이터 사용)
+function loadCurrent(){
+  st.current = st.mine[st.date] || 0;
   st.value = st.current || DEFAULT_COUNT;
+  st.busy = false;
   updateUI();
+}
+
+// 뒤에서 조용히 최신 데이터 확인 — 사용자가 인원을 바꾸는 중이면 값은 건드리지 않음
+async function refreshQuiet(first){
+  const dept = st.dept, my = ++st.token;
+  if(first){ st.busy = true; $("#status").textContent = "불러오는 중…"; updateUI(true); }
+  const r = await loadInit();
+  if(my !== st.token || dept !== st.dept || !$("#num")) return;
+  if(!r.ok){ st.busy = false; showMsg(r.error, "err"); updateUI(); return; }
+  const touched = !first && st.value !== (st.current || DEFAULT_COUNT);
+  fillMine();
+  if(first || !touched) loadCurrent(); else { st.current = st.mine[st.date] || 0; updateUI(); }
 }
 
 function updateUI(loading){
@@ -493,14 +501,17 @@ async function doSave(count){
   const late = lateToday(st.date);
   if(closed(st.date) && !(late && st.current > 0)){ showMsg("등록이 마감된 날짜입니다. 화면을 새로 고칩니다.", "err"); setTimeout(viewForm, 1200); return; }
   const date = st.date, name = DEPTS[st.dept], prev = st.current, tail = late ? " (마감 후)" : "";
-  st.busy = true; hideMsg(); updateUI();
+  st.busy = true; st.token++; hideMsg(); updateUI();
+  const btn = count ? $("#save") : $("#cancel");
+  btn.textContent = "저장 중…";
   const r = await api(null, { d:st.dept, date, count });
   st.busy = false;
   if(r.ok){
-    // 완료되면 메인 화면으로 자동 이동
+    applyResult(r);
+    // 완료되면 메인 화면으로 자동 이동 (응답에 담긴 최신 집계로 바로 표시)
     viewHome(!count ? `${name} · ${fmt(date)} 등록 취소 완료${tail}`
       : prev ? `${name} · ${fmt(date)} ${prev}명 → ${count}명 수정 완료${tail}`
-      : `${name} · ${fmt(date)} ${count}명 등록 완료`);
+      : `${name} · ${fmt(date)} ${count}명 등록 완료`, !!r.days);
     window.scrollTo(0, 0);
     return;
   }
@@ -596,7 +607,7 @@ async function adminOp(payload, okText){
   $("#adminBtn").onclick = () => st.pw ? viewAdmin() : viewAdminLogin();
   const d = new URLSearchParams(location.search).get("d");   // 부서 전용 링크: ?d=부서ID
   if(d){
-    await loadDepts();
+    await loadInit();
     if(DEPTS[d]){ st.dept = d; return viewForm(); }
   }
   viewHome();
