@@ -71,8 +71,8 @@ main{max-width:440px;margin:0 auto;padding-block:14px 32px;
 .sec small{font-weight:400;font-size:11px}
 .badge{font-style:normal;font-size:11px;font-weight:600;margin-left:6px;padding:2px 7px;border-radius:999px;background:var(--note-bg);color:var(--note);letter-spacing:0;white-space:nowrap}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:12px}
-.depts{display:grid;grid-template-columns:repeat(auto-fit,minmax(74px,1fr));gap:6px;padding:8px}
-.opt{height:40px;padding:0 4px;border-radius:8px;border:1px solid var(--line);background:var(--surface);font-size:12.5px;font-weight:500;white-space:nowrap}
+.depts{display:grid;grid-template-columns:repeat(auto-fit,minmax(74px,1fr));gap:6px;padding:8px;align-items:stretch}
+.opt{min-height:44px;padding:5px 4px;border-radius:8px;border:1px solid var(--line);background:var(--surface);font-size:12px;font-weight:500;line-height:1.3;white-space:normal;word-break:keep-all;overflow-wrap:anywhere}
 .opt:hover{border-color:var(--accent);color:var(--accent)}
 .opt:active{background:var(--accent-soft)}
 .row{display:grid;grid-template-columns:76px 1fr auto;gap:10px;align-items:center;padding:9px 12px;border-top:1px solid var(--line)}
@@ -124,6 +124,7 @@ main{max-width:440px;margin:0 auto;padding-block:14px 32px;
 .stepper input::-webkit-outer-spin-button,.stepper input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
 .status{text-align:center;font-size:12.5px;color:var(--sub);margin-top:8px;min-height:18px}
 .status b{color:var(--accent)}
+.late{color:var(--note);font-size:12px;font-weight:600}
 .primary{width:100%;height:44px;border:0;border-radius:10px;background:var(--accent);color:var(--accent-ink);font-size:15px;font-weight:600;margin-top:10px}
 .ghost{width:100%;height:38px;border:1px solid var(--line);border-radius:10px;background:transparent;color:var(--err);font-size:13px;margin-top:6px}
 .primary:disabled,.ghost:disabled{opacity:.45}
@@ -189,6 +190,8 @@ function isWeekend(s){ const w = dow(s); return w === 0 || w === 6; }
 function fmt(s){ const [,m,d]=s.split("-").map(Number); return `${m}/${d}(${W[dow(s)]})`; }
 function longDate(s){ const [y,m,d]=s.split("-").map(Number); return `${y}. ${m}. ${d}. (${W[dow(s)]})`; }
 function closed(s){ const t=kst(); return s < t.date || (s === t.date && t.hour >= DEADLINE_HOUR); }
+// 오늘 마감 이후 여부 (이때는 기존 등록의 수정·취소만 허용)
+function lateToday(s){ const t=kst(); return s === t.date && t.hour >= DEADLINE_HOUR; }
 function dateList(){
   const t = kst();
   let s = t.hour < DEADLINE_HOUR ? t.date : addDays(t.date,1);
@@ -278,7 +281,7 @@ async function mockApi(p, b){
   }
   if(b){
     if(!names[b.d]) return { ok:false, error:"부서 정보가 올바르지 않습니다. 화면을 새로 고쳐 주세요." };
-    if(closed(b.date)) return { ok:false, error:"등록이 마감된 날짜입니다." };
+    if(closed(b.date) && !(lateToday(b.date) && (db[b.date] || {})[b.d])) return { ok:false, error:"오늘 신규 등록은 마감되었습니다. 기존 등록만 수정할 수 있습니다." };
     db[b.date] = db[b.date] || {};
     if(b.count === 0) delete db[b.date][b.d]; else db[b.date][b.d] = b.count;
     store.set("mockdb2", JSON.stringify(db));
@@ -308,7 +311,7 @@ async function viewHome(flash){
   app.innerHTML = `
   <section class="hero">
     <div class="hero-top"><span class="hdate">${longDate(t.date)}</span>
-      <span class="pill${open ? " open" : ""}">${open ? `오전 ${DEADLINE_HOUR}시까지 접수` : "확정"}</span></div>
+      <span class="pill${open ? " open" : ""}">${open ? `오전 ${DEADLINE_HOUR}시까지 접수` : "마감 · 수정만 가능"}</span></div>
     <div class="hero-mid"><span class="hlabel">식수인원 제외</span><span class="hnum" id="tTotal">…</span></div>
     <div class="hmeta"><span id="tMeta"></span><button class="icon" id="rf">새로고침</button></div>
     <div class="hlist" id="tItems" hidden></div>
@@ -342,7 +345,7 @@ async function viewHome(flash){
   $("#tTotal").innerHTML = today ? `−${today.total}<small>명</small>` : `0<small>명</small>`;
   $("#tMeta").textContent = `${all}곳 중 ${today ? today.items.length : 0}곳 등록 · ${t.hm} 기준`;
   if(today){
-    $("#tItems").innerHTML = today.items.map(i => open && DEPTS[i.dept]
+    $("#tItems").innerHTML = today.items.map(i => DEPTS[i.dept]
       ? `<button class="hitem" data-id="${i.dept}" data-d="${t.date}">${esc(i.name)}<b>${i.count}</b></button>`
       : `<li>${esc(i.name)}<b>${i.count}</b></li>`).join("");
     $("#tItems").hidden = false;
@@ -371,14 +374,17 @@ async function viewHome(flash){
 /* ---- 화면 2: 부서별 등록·수정 ---- */
 function viewForm(){
   if(!DEPTS[st.dept]) return viewHome("부서 정보가 바뀌었습니다. 다시 선택해 주세요.");
-  const dates = dateList();
-  if(!st.date || !dates.includes(st.date)) st.date = dates[0];
+  let dates = dateList();
+  const t0 = kst().date;
+  // 마감 후에도 오늘 날짜는 표시(기존 등록 수정·취소용)
+  if(lateToday(t0) && !(SKIP_WEEKEND && isWeekend(t0))) dates = [t0, ...dates];
+  if(!st.date || !dates.includes(st.date)) st.date = dates.find(x => !lateToday(x)) || dates[0];
   st.armed = false;
   app.innerHTML = `
   <div class="formhead"><button class="back" id="home">← 메인</button><b>${esc(DEPTS[st.dept])}</b></div>
   <div class="panel pad">
     <div class="flabel">날짜</div>
-    <div class="chips">${dates.map(s => `<button class="chip${s===st.date?" on":""}" data-d="${s}"><span class="tag">${tagOf(s)}</span><b>${fmt(s)}</b><span class="cnt" data-c="${s}"></span></button>`).join("")}</div>
+    <div class="chips">${dates.map(s => `<button class="chip${s===st.date?" on":""}" data-d="${s}"><span class="tag">${lateToday(s) ? "오늘·수정만" : tagOf(s)}</span><b>${fmt(s)}</b><span class="cnt" data-c="${s}"></span></button>`).join("")}</div>
     <div class="flabel">빠지는 인원</div>
     <div class="stepper">
       <button id="minus" aria-label="1명 줄이기">−</button>
@@ -453,10 +459,15 @@ function updateUI(loading){
       const diff = st.value - st.current;
       $("#status").innerHTML = `<b>${st.current}명 → ${st.value}명</b>으로 수정 (${diff > 0 ? "+" : ""}${diff})`;
     }
+    if(lateToday(st.date)){
+      if(!st.current) $("#status").innerHTML = `<span class="late">오늘 신규 등록은 오전 ${DEADLINE_HOUR}시에 마감되었습니다</span>`;
+      else $("#status").innerHTML += `<br><span class="late">마감 후 수정입니다 · 식당 담당자에게도 알려 주세요</span>`;
+    }
   }
   const same = !!st.current && st.value === st.current;
-  $("#save").textContent = !st.current ? "등록" : same ? "변경 사항 없음" : "수정 등록";
-  $("#save").disabled = st.busy || same;
+  const blocked = lateToday(st.date) && !st.current;
+  $("#save").textContent = blocked ? "신규 등록 마감" : !st.current ? "등록" : same ? "변경 사항 없음" : "수정 등록";
+  $("#save").disabled = st.busy || same || blocked;
   $("#cancel").hidden = !st.current;
   $("#cancel").textContent = st.armed ? `한 번 더 누르면 ${fmt(st.date)} 등록 취소` : "등록 취소";
   $("#cancel").disabled = st.busy;
@@ -464,15 +475,16 @@ function updateUI(loading){
 
 async function doSave(count){
   if(count !== 0 && count < MIN_COUNT){ showMsg(`${MIN_COUNT}명 이상 입력해 주세요.`, "err"); return; }
-  if(closed(st.date)){ showMsg("등록이 마감된 날짜입니다. 화면을 새로 고칩니다.", "err"); setTimeout(viewForm, 1200); return; }
-  const date = st.date, name = DEPTS[st.dept], prev = st.current;
+  const late = lateToday(st.date);
+  if(closed(st.date) && !(late && st.current > 0)){ showMsg("등록이 마감된 날짜입니다. 화면을 새로 고칩니다.", "err"); setTimeout(viewForm, 1200); return; }
+  const date = st.date, name = DEPTS[st.dept], prev = st.current, tail = late ? " (마감 후)" : "";
   st.busy = true; hideMsg(); updateUI();
   const r = await api(null, { d:st.dept, date, count });
   st.busy = false;
   if(r.ok){
     // 완료되면 메인 화면으로 자동 이동
-    viewHome(!count ? `${name} · ${fmt(date)} 등록 취소 완료`
-      : prev ? `${name} · ${fmt(date)} ${prev}명 → ${count}명 수정 완료`
+    viewHome(!count ? `${name} · ${fmt(date)} 등록 취소 완료${tail}`
+      : prev ? `${name} · ${fmt(date)} ${prev}명 → ${count}명 수정 완료${tail}`
       : `${name} · ${fmt(date)} ${count}명 등록 완료`);
     window.scrollTo(0, 0);
     return;
