@@ -154,7 +154,7 @@ main{max-width:440px;margin:0 auto;padding-block:14px 32px;
 /* ============================================================
    [설정] 운영 전 수정할 부분은 이 블록뿐입니다.
    - API_URL : Apps Script 웹 앱 배포 URL (비워두면 미리보기 모드)
-   - MIN_COUNT, DEADLINE_HOUR : Code.gs와 같은 값이어야 함
+   - MIN_COUNT, DEADLINE_HOUR, DEADLINE_MIN : Code.gs와 같은 값이어야 함
    - DEFAULT_COUNT : 새로 등록할 때 처음 표시되는 인원(기본 5명)
    ※ 부서 목록은 [관리자] 화면에서 관리합니다(구글 시트 '부서목록' 탭).
    ※ 관리자 비밀번호는 Code.gs에만 있습니다.
@@ -163,7 +163,8 @@ const API_URL = "";
 const MIN_COUNT = 1;        // 최소 등록 인원 (5명 미만도 등록 가능)
 const DEFAULT_COUNT = 5;    // 새 등록 시 기본 표시 인원
 const MAX_COUNT = 300;      // 입력 상한(오입력 방지)
-const DEADLINE_HOUR = 10;   // 당일 마감 시각(시)
+const DEADLINE_HOUR = 9;    // 당일 마감 시각(시)
+const DEADLINE_MIN = 30;    // 당일 마감 시각(분) → 오전 9시 30분
 const DAY_COUNT = 7;        // 입력 화면에 보여줄 날짜 수
 const SKIP_WEEKEND = true;  // 주말 제외
 /* ============================================================ */
@@ -185,19 +186,23 @@ const store = {
 function kst(){
   const parts = new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Seoul",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date());
   const o = {}; parts.forEach(p => o[p.type] = p.value);
-  return { date:`${o.year}-${o.month}-${o.day}`, hour:Number(o.hour), hm:`${o.hour}:${o.minute}` };
+  // late: 오늘 마감 시각이 지났는지
+  const late = Number(o.hour) * 60 + Number(o.minute) >= DEADLINE_HOUR * 60 + DEADLINE_MIN;
+  return { date:`${o.year}-${o.month}-${o.day}`, hour:Number(o.hour), hm:`${o.hour}:${o.minute}`, late };
 }
+// 화면 표시용 마감 문구: "오전 9시 30분"
+function deadlineText(){ const h = DEADLINE_HOUR, m = DEADLINE_MIN; return `${h < 12 ? "오전" : "오후"} ${h % 12 || 12}시${m ? ` ${m}분` : ""}`; }
 function addDays(s,n){ const [y,m,d]=s.split("-").map(Number); return new Date(Date.UTC(y,m-1,d+n)).toISOString().slice(0,10); }
 function dow(s){ const [y,m,d]=s.split("-").map(Number); return new Date(Date.UTC(y,m-1,d)).getUTCDay(); }
 function isWeekend(s){ const w = dow(s); return w === 0 || w === 6; }
 function fmt(s){ const [,m,d]=s.split("-").map(Number); return `${m}/${d}(${W[dow(s)]})`; }
 function longDate(s){ const [y,m,d]=s.split("-").map(Number); return `${y}. ${m}. ${d}. (${W[dow(s)]})`; }
-function closed(s){ const t=kst(); return s < t.date || (s === t.date && t.hour >= DEADLINE_HOUR); }
+function closed(s){ const t=kst(); return s < t.date || (s === t.date && t.late); }
 // 오늘 마감 이후 여부 (이때는 기존 등록의 수정·취소만 허용)
-function lateToday(s){ const t=kst(); return s === t.date && t.hour >= DEADLINE_HOUR; }
+function lateToday(s){ const t=kst(); return s === t.date && t.late; }
 function dateList(){
   const t = kst();
-  let s = t.hour < DEADLINE_HOUR ? t.date : addDays(t.date,1);
+  let s = !t.late ? t.date : addDays(t.date,1);
   const out = [];
   while(out.length < DAY_COUNT){
     if(!(SKIP_WEEKEND && isWeekend(s))) out.push(s);
@@ -316,18 +321,18 @@ async function viewHome(flash){
   st.dept = null; st.armed = false;
   if(location.search) history.replaceState(null, "", location.pathname);
   const t = kst();
-  const open = t.hour < DEADLINE_HOUR;
+  const open = !t.late;
   app.innerHTML = `
   <section class="hero">
     <div class="hero-top"><span class="hdate">${longDate(t.date)}</span>
-      <span class="pill${open ? " open" : ""}">${open ? `오전 ${DEADLINE_HOUR}시까지 접수` : "마감 · 수정만 가능"}</span></div>
+      <span class="pill${open ? " open" : ""}">${open ? `${deadlineText()}까지 접수` : "마감 · 수정만 가능"}</span></div>
     <div class="hero-mid"><span class="hlabel">식수인원 제외</span><span class="hnum" id="tTotal">…</span></div>
     <div class="hmeta"><span id="tMeta"></span><button class="icon" id="rf">새로고침</button></div>
     <div class="hlist" id="tItems" hidden></div>
   </section>
   <div class="msg ok" id="flash" ${flash ? "" : "hidden"}>${esc(flash || "")}</div>
 
-  <div class="sec"><span>감축 인원 등록 <em class="badge">5명 이상 빠질 때만 등록</em></span><small>당일 오전 ${DEADLINE_HOUR}시 마감</small></div>
+  <div class="sec"><span>감축 인원 등록 <em class="badge">5명 이상 빠질 때만 등록</em></span><small>당일 ${deadlineText()} 마감</small></div>
   <div class="panel depts" id="depts"><div class="empty">불러오는 중…</div></div>
 
   <div class="sec">식수인원 현황 <small>1주일 · 부서명을 누르면 수정</small></div>
@@ -405,7 +410,7 @@ function viewForm(){
     <button class="ghost" id="cancel" hidden>등록 취소</button>
     <div class="msg" id="msg" hidden></div>
   </div>
-  <p class="foot">날짜 아래 인원 표시는 이미 등록된 내용입니다 · 날짜를 눌러 수정<br>당일 오전 ${DEADLINE_HOUR}시 마감</p>`;
+  <p class="foot">날짜 아래 인원 표시는 이미 등록된 내용입니다 · 날짜를 눌러 수정<br>당일 ${deadlineText()} 마감</p>`;
 
   $("#home").onclick = () => viewHome();
   app.querySelectorAll(".chip").forEach(b => b.onclick = () => {
@@ -469,7 +474,7 @@ function updateUI(loading){
       $("#status").innerHTML = `<b>${st.current}명 → ${st.value}명</b>으로 수정 (${diff > 0 ? "+" : ""}${diff})`;
     }
     if(lateToday(st.date)){
-      if(!st.current) $("#status").innerHTML = `<span class="late">오늘 신규 등록은 오전 ${DEADLINE_HOUR}시에 마감되었습니다</span>`;
+      if(!st.current) $("#status").innerHTML = `<span class="late">오늘 신규 등록은 ${deadlineText()}에 마감되었습니다</span>`;
       else $("#status").innerHTML += `<br><span class="late">마감 후 수정입니다 · 식당 담당자에게도 알려 주세요</span>`;
     }
   }
