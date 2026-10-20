@@ -71,7 +71,7 @@ main{max-width:440px;margin:0 auto;padding-block:14px 32px;
 .sec small{font-weight:400;font-size:11px}
 .badge{font-style:normal;font-size:11px;font-weight:600;margin-left:6px;padding:2px 7px;border-radius:999px;background:var(--note-bg);color:var(--note);letter-spacing:0;white-space:nowrap}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:12px}
-.depts{display:grid;grid-template-columns:repeat(auto-fit,minmax(74px,1fr));gap:6px;padding:8px;align-items:stretch}
+.depts{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:6px;padding:8px;align-items:stretch}
 .opt{min-height:44px;padding:5px 4px;border-radius:8px;border:1px solid var(--line);background:var(--surface);font-size:12px;font-weight:500;line-height:1.3;white-space:normal;word-break:keep-all;overflow-wrap:anywhere}
 .opt .l1{display:block;font-size:10.5px;font-weight:500;color:var(--sub)}
 .opt .l2{display:block;font-size:12.5px;font-weight:600}
@@ -256,11 +256,12 @@ function mockGet(k, init){
   const v = init(); store.set(k, JSON.stringify(v)); return v;
 }
 function mockDepts(){
-  return mockGet("mockdepts", () => [["A1","A부서 1부"],["A2","A부서 2부"],["A3","A부서 3부"],["A4","A부서 4부"],
-    ["A5","A부서 5부"],["B1","B부서 1부"],["X1","외부업체 ①"],["X2","외부업체 ②"]].map(([id,name]) => ({id,name})));
+  // 기본 부서 목록 (미리보기 모드용 — 서버 연결 후에는 구글 시트 '부서목록' 탭을 사용)
+  return mockGet("mockdepts3", () => [["A1","한강서부사업단 경영보상부"],["A2","한강서부사업단 공사관리부"],["A3","한강서부사업단 공사1부"],["A4","한강서부사업단 공사2부"],
+    ["A5","한강서부사업단 공사3부"],["B1","경기동남권지사 수지운영부"],["X1","외부업체①(가명)"],["X2","외부업체②(가명)"]].map(([id,name]) => ({id,name})));
 }
 function mockDB(){
-  return mockGet("mockdb2", () => {
+  return mockGet("mockdb3", () => {
     // 미리보기 전용 예시 데이터
     const t = kst().date, d = dateList().filter(x => x !== t), ex = {};
     if(!isWeekend(t)) ex[t] = { A2:7, X1:12 };
@@ -273,7 +274,7 @@ async function mockApi(p, b){
   await new Promise(r => setTimeout(r, 150));
   const db = mockDB(), depts = mockDepts();
   const names = Object.fromEntries(depts.map(x => [x.id, x.name]));
-  const saveDepts = () => store.set("mockdepts", JSON.stringify(depts));
+  const saveDepts = () => store.set("mockdepts3", JSON.stringify(depts));
   if(b && b.action === "admin"){
     if(fnv(b.pw) !== MOCK_PW) return { ok:false, auth:true, error:"비밀번호가 맞지 않습니다." };
     if(b.op === "login") return { ok:true, depts };
@@ -298,7 +299,7 @@ async function mockApi(p, b){
     if(closed(b.date) && !(lateToday(b.date) && (db[b.date] || {})[b.d])) return { ok:false, error:"오늘 신규 등록은 마감되었습니다. 기존 등록만 수정할 수 있습니다." };
     db[b.date] = db[b.date] || {};
     if(b.count === 0) delete db[b.date][b.d]; else db[b.date][b.d] = b.count;
-    store.set("mockdb2", JSON.stringify(db));
+    store.set("mockdb3", JSON.stringify(db));
     return { ok:true, count:b.count };
   }
   if(p.action === "depts") return { ok:true, depts };
