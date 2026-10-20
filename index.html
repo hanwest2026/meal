@@ -153,13 +153,13 @@ main{max-width:440px;margin:0 auto;padding-block:14px 32px;
 <script>
 /* ============================================================
    [설정] 운영 전 수정할 부분은 이 블록뿐입니다.
-   - API_URL : https://script.googleusercontent.com/macros/echo?user_content_key=AUkAhnTgF89Z7HtVCiDpoXMi0op9LlUmTDiKHSFmoI8fR8q_lEqcN8YmVq0mQGxidHiTr0XeztHhVdE-NmlesyIxVAbbjDRIXxT7dx-E0l0dFwtYPh7N7c4OpC9_WApAlOTyT-YkNJqGhfNeFkRdvsuaA-ymBqROFsIymHuHypZnRP0w8P0FaLt4K4SNpvyV7KaEdpQGCySBHmibzk9vrj3kPMy1l9Sx9o2wJTK1GoxvxVmiYanf4TAGdHb_gVZOPhLu_JKNjoRPUZY2JwHO5OCApY8SkLnX7d2EcOyeQDY1&lib=Mbz-jPsNUJ_Kwgefl1l66rrheim2xGTvM
+   - API_URL : Apps Script 웹 앱 배포 URL (비워두면 미리보기 모드)
    - MIN_COUNT, DEADLINE_HOUR, DEADLINE_MIN : Code.gs와 같은 값이어야 함
    - DEFAULT_COUNT : 새로 등록할 때 처음 표시되는 인원(기본 5명)
    ※ 부서 목록은 [관리자] 화면에서 관리합니다(구글 시트 '부서목록' 탭).
    ※ 관리자 비밀번호는 Code.gs에만 있습니다.
    ============================================================ */
-const API_URL = "https://script.google.com/macros/s/AKfycbyiM746rfUnF2f0CxabIcbQa2Y8e8f0eV7MLcKvOLFmkBGTQ3HY1WR7pxtXy6dZlUyq/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbzBdxMCMeVeIM9coKr_xAHTn7vD0lttAWU53L_9BTHFldvEvdHoQttIiEx_MKCYWEFN/exec";
 const MIN_COUNT = 1;        // 최소 등록 인원 (5명 미만도 등록 가능)
 const DEFAULT_COUNT = 5;    // 새 등록 시 기본 표시 인원
 const MAX_COUNT = 300;      // 입력 상한(오입력 방지)
@@ -242,7 +242,12 @@ async function api(params, body){
 }
 // 부서 목록 + 집계를 한 번의 호출로 불러와 보관 (서버 호출 횟수 줄이기)
 async function loadInit(){
-  const r = await api({ action:"init" });
+  let r = await api({ action:"init" });
+  // 서버(Code.gs)가 아직 예전 버전이면 init이 없으므로, 예전 방식(부서 + 집계 따로)으로 자동 전환
+  if(!r.ok && !r.auth){
+    const [dr, sr] = await Promise.all([api({ action:"depts" }), api({ action:"summary" })]);
+    r = (dr.ok && sr.ok) ? { ok:true, depts:dr.depts, days:sr.days } : (dr.ok ? sr : dr);
+  }
   if(r.ok){ setDepts(r.depts); st.days = r.days; }
   return r;
 }
